@@ -1,4 +1,5 @@
-#encoding: utf-8
+# -*- coding: utf-8 -*-
+from __future__ import unicode_literals
 
 import pickle
 import json
@@ -18,90 +19,105 @@ from .models import *
 
 from paymill import validate_webhook
 
-class PaymillTransactionView( View ):
 
-    def post( self, request, *args, **kwargs ):
+class PaymillTransactionView(View):
+    def post(self, request, *args, **kwargs):
+        amount = request.POST.get('payment_amount', 0)
+        currency = request.POST.get('payment_currency', 'USD')
+        description = request.POST.get('payment_description', '')
+        next = request.POST.get(
+            'next', getattr(settings, 'PAYMILL_SUCCESS', '/'))
 
-        amount = request.POST.get( 'payment_amount', 0 )
-        currency = request.POST.get( 'payment_currency', 'USD' )
-        description = request.POST.get( 'payment_description', '' )
-        next = request.POST.get( 'next', getattr( settings, 'PAYMILL_SUCCESS', '/' ) )
+        p = pymill.Pymill(settings.PAYMILL_PRIVATE_KEY)
+        card = p.newcard(request.POST.get('paymillToken'))["data"]
+        transaction = p.transact(
+            amount=amount,
+            currency=currency,
+            description=description,
+            payment=card["id"]
+        )['data']
 
-        p = pymill.Pymill( settings.PAYMILL_PRIVATE_KEY )
-        card = p.newcard( request.POST.get('paymillToken') )["data"]
-        transaction = p.transact( amount=amount, currency=currency, description=description, payment=card["id"])["data"] 
+        if getattr(settings, 'PAYMILL_SAVE_TRANSACTIONS', True):
+            transaction = Transaction.parse_transaction(transaction)
 
-        if getattr( settings, 'PAYMILL_SAVE_TRANSACTIONS', True ):
-            transaction = Transaction.parse_transaction( transaction )
+        return HttpResponseRedirect(next)
 
-        return HttpResponseRedirect( next  )
 
-class PaymillAddCardView( View ):
+class PaymillAddCardView(View):
+    def post(self, request, *args, **kwargs):
+        next = request.POST.get(
+            'next', getattr(settings, 'PAYMILL_SUCCESS', '/'))
+        client = request.session.get('paymill_client', None)
+        client.add_payment(request.POST.get('paymillToken'))
 
-    def post( self, request, *args, **kwargs ):
+        return HttpResponseRedirect(next)
 
-        next = request.POST.get( 'next', getattr( settings, 'PAYMILL_SUCCESS', '/' ) )
-        client = request.session.get( 'paymill_client', None )
-        client.add_payment( request.POST.get('paymillToken') )
 
-        return HttpResponseRedirect( next  )
-
-class WebhookView( View ):
-
+class WebhookView(View):
     @method_decorator(csrf_exempt)
     def dispatch(self, *args, **kwargs):
         return super(WebhookView, self).dispatch(*args, **kwargs)
 
-    def post( self, request, *args, **kwargs ):
-        if validate_webhook( kwargs.pop('secret') ):
+    def post(self, request, *args, **kwargs):
+        if validate_webhook(kwargs.pop('secret')):
             try:
-                event = json.loads( request.body )
-                event = event['event'] #TODO: Check for edge cases and handle errors
-                event_name = event['event_type'].replace('.','_')
-    
-                #Process Paymill objects
-                f = getattr( self, event_name, None )
+                event = json.loads(request.body)
+                # TODO: Check for edge cases and handle errors
+                event = event['event']
+                event_name = event['event_type'].replace('.', '_')
+
+                # Process Paymill objects
+                f = getattr(self, event_name, None)
                 print event_name
                 print event
                 if f:
-                    f( event )
-                signal = get_signal( event_name )
-                signal.send( sender=self, event=event )
+                    f(event)
+                signal = get_signal(event_name)
+                signal.send(sender=self, event=event)
             except Exception as e:
                 print 'ERROR'
-                pass #TODO: Log errors
-            pickle.dump( event, open('%s-%s.log'%(event_name,event['event_resource']['id']), 'wb') )
-            
-        return HttpResponse( ) #Paymill doesn't care if we succeed or fail so we return an empty 200:OK
+                pass  # TODO: Log errors
+            pickle.dump(
+                event, open('%s-%s.log' % (event_name, event['event_resource']['id']), 'wb'))
 
-    def transaction_created( self, event ):
-        t = Transaction.update_or_create( event['event_resource'] )
-        t.save( )
-    
-    def transaction_succeeded( self, event ):
-        self.transaction_created( event ) 
-    
-    def transaction_failed( self, event ):
-        self.transaction_created( event ) 
+        # Paymill doesn't care if we succeed or fail so we return an empty
+        # 200:OK
+        return HttpResponse()
 
-    def refund_succeeded( self, event ):
-        t = Transaction.update_or_create( event['event_resource']['transaction'] )
-        t.save( )
+    def transaction_created(self, event):
+        t = Transaction.update_or_create(event['event_resource'])
+        t.save()
 
-    def client_updated( self, event ):
-        c = Client.update_or_create( event['event_resource'] )
-        c.save( )
+    def transaction_succeeded(self, event):
+        self.transaction_created(event)
 
-    def subscription_created( self, event ):
-        self.subscription_updated( event )
-        
-    def subscription_updated( self, event ):
-        s = Subscription.update_or_create( event['event_resource'] )
-        s.save( )
+    def transaction_failed(self, event):
+        self.transaction_created(event)
 
-    def subscription_deleted( self, event ):
-        s = Subscription.objects.get( pk=event['event_resource']['id'] )
-        s.delete( )
+    def refund_created(self, event):
+        r = Refund.update_or_create(event['event_resource'])
+        r.save()
+
+    def refund_succeeded(self, event):
+        self.refund_created(event)
+
+    def refund_failed(self, event):
+        self.refund_created(event)
+
+    def client_updated(self, event):
+        c = Client.update_or_create(event['event_resource'])
+        c.save()
+
+    def subscription_created(self, event):
+        self.subscription_updated(event)
+
+    def subscription_updated(self, event):
+        s = Subscription.update_or_create(event['event_resource'])
+        s.save()
+
+    def subscription_deleted(self, event):
+        s = Subscription.objects.get(pk=event['event_resource']['id'])
+        s.delete()
 
 '''
     {
