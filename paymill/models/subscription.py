@@ -13,6 +13,7 @@ from django.utils import timezone
 class Subscription(PaymillModel):
     livemode = models.BooleanField(default=False)
     cancel_at_period_end = models.BooleanField(default=False)
+    amount = models.PositiveIntegerField(blank=True, null=True)
     trial_start = models.DateTimeField(blank=True, null=True)
     trial_end = models.DateTimeField(blank=True, null=True)
     next_capture_at = models.DateTimeField()
@@ -26,7 +27,7 @@ class Subscription(PaymillModel):
     def _create_paymill_object(self):
         return self.paymill.new_subscription(self.client.id, self.offer.id,
                                              self.payment.id,
-                                             start_at=self.start_at)
+                                             start_at=self.start_at, amount=self.amount)
 
     def _delete_paymill_object(self, *args, **kwargs):
         self.cancel()

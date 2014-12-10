@@ -22,6 +22,7 @@ from paymill import validate_webhook
 class PaymillTransactionView(View):
     def post(self, request, *args, **kwargs):
         amount = request.POST.get('payment_amount', 0)
+        subsequent_payment_amount = request.POST.get('subsequent_payment_amount', 0)
         currency = request.POST.get('payment_currency', 'USD')
         description = request.POST.get('payment_description', '')
         offer = request.POST.get('payment_subscription_code', '')
@@ -36,10 +37,14 @@ class PaymillTransactionView(View):
         card = p.new_card(request.POST.get('paymillToken'), client.id)
 
         if offer:
+            if subsequent_payment_amount:
+                amount_due_recurring = subsequent_payment_amount
+            else:
+                amount_due_recurring = amount
             paymill_offer = Offer.objects.get(id=offer)
             client = Client.update_or_create(client)
             payment = Payment.update_or_create(card)
-            paymill_offer.subscribe(client)
+            paymill_offer.subscribe(client, amount=amount_due_recurring)
         else:
             transaction = p.transact(
                 amount=amount,
